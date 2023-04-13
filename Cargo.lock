@@ -270,7 +270,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "breakfast"
+name = "breakfast-embed"
 version = "0.1.0"
 dependencies = [
  "actix-web",

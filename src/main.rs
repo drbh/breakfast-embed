@@ -4,92 +4,43 @@
 //! and allows efficient nearest-neighbor search for similar sentences.
 
 use actix_web::{patch, post, web, App, HttpResponse, HttpServer, Responder};
-use fastbloom_rs::Membership;
-use fastbloom_rs::{BloomFilter, FilterBuilder};
 use instant_distance::{Builder, HnswMap, Search};
 use parking_lot::Mutex;
-use reqwest::header;
-use reqwest::redirect::Policy;
-use reqwest::Client;
 use rusqlite::{Connection, Result};
-use serde_derive::{Deserialize, Serialize};
 use serde_json::json;
-use std::env;
 use std::sync::Arc;
+
+mod utils;
+use utils::*;
+
+mod types;
+use types::*;
 
 // use std::time::Duration;
 // use async_std::task;
 
+// use sqlite as a queue for storing new embeddings
+
 /// Application state containing a shared HNSW map.
 struct AppState {
     arc_mutex_map: Arc<Mutex<HnswMap<Point, String>>>,
-    arc_mutex_bloom: Arc<Mutex<BloomFilter>>,
     arc_conn: Arc<Mutex<Connection>>,
-}
-
-/// Fetch the sentence embeddings for a list of sentences using OpenAI's
-async fn create_openai_embedding(
-    text_to_embed: &str,
-) -> Result<EmbedResponse, Box<dyn std::error::Error>> {
-    println!("Creating OpenAI embedding for: {}", text_to_embed);
-    let mut headers = header::HeaderMap::new();
-    headers.insert("Content-Type", "application/json".parse().unwrap());
-    headers.insert(
-        "Authorization",
-        [
-            "Bearer ",
-            env::var("OPENAI_API_KEY")
-                .unwrap_or("".to_string())
-                .as_str(),
-        ]
-        .concat()
-        .parse()
-        .unwrap(),
-    );
-
-    let client = Client::builder().redirect(Policy::none()).build().unwrap();
-
-    let body = json!({
-    "input": text_to_embed,
-    "model": "text-embedding-ada-002"
-    })
-    .to_string();
-
-    let res = client
-        .post("https://api.openai.com/v1/embeddings")
-        .headers(headers)
-        .body(body)
-        .send()
-        .await
-        .unwrap()
-        .text()
-        .await
-        .unwrap();
-
-    let response_json: EmbedResponse = serde_json::from_str(&res).unwrap();
-
-    Ok(response_json)
 }
 
 /// Flushes the HNSW map to disk.
 #[patch("/flush")]
-async fn flush(req_body: String, data: web::Data<AppState>) -> impl Responder {
+async fn flush(_req_body: String, data: web::Data<AppState>) -> impl Responder {
     // serialize the map
     let map = data.arc_mutex_map.lock();
     let serialized = serde_json::to_string(&*map).unwrap();
     std::fs::write("map.json", serialized.clone()).unwrap();
-
-    // serialize the bloom filter
-    let bloom = data.arc_mutex_bloom.lock();
-    let mut file = std::fs::File::create("bloom.json").unwrap();
-    serde_json::to_writer(&mut file, bloom.get_u64_array()).unwrap();
 
     HttpResponse::Ok().body("Flushed map to disk.")
 }
 
 /// Loads the HNSW map from disk.
 #[patch("/load")]
-async fn load(req_body: String, data: web::Data<AppState>) -> impl Responder {
+async fn load(_req_body: String, data: web::Data<AppState>) -> impl Responder {
     let mut file = std::fs::File::open("map.json").unwrap();
     let map: HnswMap<Point, String> = serde_json::from_reader(&mut file).unwrap();
     let mut map_mutex = data.arc_mutex_map.lock();
@@ -170,7 +121,7 @@ async fn update(req_body: String, data: web::Data<AppState>) -> impl Responder {
 
 /// Embed a sentence using OpenAI's text embedding API.
 #[post("/embed")]
-async fn embed(req_body: String, data: web::Data<AppState>) -> impl Responder {
+async fn embed(req_body: String, _data: web::Data<AppState>) -> impl Responder {
     let req: Result<EmbedRequest, _> = serde_json::from_str(&req_body);
 
     match req {
@@ -211,7 +162,6 @@ async fn embed(req_body: String, data: web::Data<AppState>) -> impl Responder {
     }
 }
 
-/// Embed search and insert a sentence using OpenAI's text embedding API.
 #[post("/embed_search_insert")]
 async fn embed_search_insert(req_body: String, data: web::Data<AppState>) -> impl Responder {
     let req: Result<EmbedRequest, _> = serde_json::from_str(&req_body);
@@ -221,164 +171,138 @@ async fn embed_search_insert(req_body: String, data: web::Data<AppState>) -> imp
             let mut results = Vec::new();
 
             for sentence in &req.sentences {
-                println!("Embedding sentence: {}", sentence);
-
-                // TODO: improve how we search sqlite
-                //
-                let mut conn = data.arc_conn.lock();
-                let mut stmt = conn
-                    .prepare("SELECT value FROM key_value_store WHERE key = ?")
-                    .unwrap();
-
-                let mut rows = stmt
-                    .query_map(
-                        &[sentence],
-                        |row: &rusqlite::Row| -> rusqlite::Result<String> { row.get(0) },
-                    )
-                    .unwrap();
-
-                if let Some(row) = rows.next() {
-                    println!("Sentence already in sqlite.");
-
-                    // TODO: return the result here
-                    let result = MyResponse {
-                        search_result: vec![],
-                        search_distance: vec![],
-                        insertion: "found in sqlite".to_string(),
-                    };
-
-                    results.push(result);
-
-                    println!("Continuing...");
-                    continue;
-                }
-
-                // TODO: decide if we want to check the bloom filter here or not
-                //
-                // check if contained in bloom filter
-                let mut bloom_filter = data.arc_mutex_bloom.lock();
-                if bloom_filter.contains(sentence.as_bytes()) {
-                    println!("Sentence already in map.");
-                    // results.push(sentence.clone());
-                    // continue;
-                } else {
-                    bloom_filter.add(sentence.as_bytes());
-                }
-
-                match create_openai_embedding(&sentence).await {
-                    Ok(open_ai_response) => {
-                        let vectors: Vec<Vec<f32>> = open_ai_response
-                            .data
-                            .iter()
-                            .map(|x| x.embedding.iter().map(|y| *y as f32).collect())
-                            .collect();
-
-                        conn.execute(
-                            "INSERT INTO key_value_store (key, value) VALUES (?1, ?2)",
-                            &[sentence, json!(vectors).to_string().as_str()],
-                        )
-                        .unwrap();
-
-                        let structured = Request {
-                            vectors: vectors.clone(),
-                            sentences: req.sentences.clone(),
-                        };
-
-                        // Search for the nearest sentence embedding.
-                        let point = Point::from_slice(&vectors[0]);
-                        let mut map = data.arc_mutex_map.lock();
-                        let mut _search = Search::default();
-
-                        // if map is none init it
-                        if map.values.len() == 0 {
-                            println!("Initializing map with {} points...", req.sentences.len());
-                            *map = Builder::default().build(
-                                vectors
-                                    .iter()
-                                    .map(|vector| Point::from_slice(vector))
-                                    .collect(),
-                                req.sentences.clone(),
-                            );
-
-                            let result = MyResponse {
-                                search_result: vec![],
-                                search_distance: vec![],
-                                insertion: "success".to_string(),
-                            };
-
-                            results.push(result);
-                            continue;
-                        }
-
-                        // Perform the search and store the result
-                        let closest_points = {
-                            let mut closest_points_vec = Vec::new();
-                            for closest_point in map.search(&point, &mut _search).take(5) {
-                                closest_points_vec
-                                    .push((closest_point.value.clone(), closest_point.distance));
-                            }
-                            closest_points_vec
-                        };
-                        // Explicitly drop the lock, allowing mutable access to the map.
-                        drop(map);
-
-                        let mut insertion = "no insert".to_string();
-
-                        // if the closest point is too far away, insert the new sentence embedding
-                        if closest_points[0].1 > 0.002 {
-                            // Re-acquire the lock and insert the new sentence embeddings into the HNSW map.
-                            let mut map = data.arc_mutex_map.lock();
-                            map.insert(Point::from_slice(&vectors[0]), sentence.clone())
-                                .expect("insertion failed");
-                            insertion = "success".to_string();
-                        } else {
-                            println!("Closest point is too close, not inserting.");
-                            println!("Closest point: {:?}", closest_points[0].0)
-                        }
-
-                        // Return the results of all three operations.
-                        let result = MyResponse {
-                            search_result: closest_points
-                                .iter()
-                                .map(|(value, _)| value.clone())
-                                .collect::<Vec<_>>(),
-                            search_distance: closest_points
-                                .iter()
-                                .map(|(_, distance)| *distance)
-                                .collect::<Vec<_>>(),
-                            insertion,
-                        };
-
-                        results.push(result);
-                    }
+                match process_sentence(sentence, data.clone()).await {
+                    Ok(result) => results.push(result),
                     Err(err) => {
-                        // Handle the error and return an appropriate error response.
-                        eprintln!("Error creating OpenAI embedding: {:?}", err);
-                        return HttpResponse::InternalServerError()
-                            .body("Error creating OpenAI embedding.");
+                        eprintln!("Error processing sentence: {:?}", err);
+                        return HttpResponse::InternalServerError().body(err.to_string());
                     }
                 }
             }
 
-            println!("Results: {:?}", results);
             HttpResponse::Ok().json(results)
         }
         Err(_) => HttpResponse::BadRequest().body("Invalid JSON format."),
     }
 }
 
-// // TODO: revist
-// async fn flush_periodically(data: web::Data<AppState>) {
-//     loop {
-//         task::sleep(Duration::from_secs(10)).await;
-//         // println!("Flushing map to disk...");
-//         let mut file = std::fs::File::open("map.json").unwrap();
-//         let map: HnswMap<Point, String> = serde_json::from_reader(&mut file).unwrap();
-//         let mut map_mutex = data.arc_mutex_map.lock();
-//         *map_mutex = map;
-//         // println!("Map flushed to disk.");
-//     }
-// }
+async fn process_sentence(
+    sentence: &str,
+    data: web::Data<AppState>,
+) -> Result<MyResponse, Box<dyn std::error::Error>> {
+    println!("Embedding sentence: {}", sentence);
+
+    let conn = data.arc_conn.lock();
+    if let Some(result) = try_find_in_sqlite(&conn, sentence)? {
+        // TODO: if we find it we should use the stored vectors to search for the closest point
+
+        let structured_request = Request {
+            vectors: vec![result.search_distance.clone()],
+            sentences: vec![sentence.to_string()],
+        };
+
+        let closest_points = search_closest_points(
+            //
+            &data.arc_mutex_map,
+            &result.search_distance,
+            &structured_request,
+        )
+        .unwrap();
+
+        println!("Closest points: {:?}", closest_points);
+
+        let to_send = MyResponse {
+            search_result: closest_points
+                .iter()
+                .map(|(value, _)| value.clone())
+                .collect::<Vec<_>>(),
+            search_distance: closest_points
+                .iter()
+                .map(|(_, distance)| *distance)
+                .collect::<Vec<_>>(),
+            insertion: "already exists".to_string(),
+        };
+
+        // TODO: should return the closest point
+        return Ok(to_send);
+    }
+
+    // TODO: if we don't find it we should create the vectors and insert them into the map
+
+    let open_ai_response = create_openai_embedding(sentence).await?;
+    let vectors: Vec<Vec<f32>> = open_ai_response
+        .data
+        .iter()
+        .map(|x| x.embedding.iter().map(|y| *y as f32).collect())
+        .collect();
+
+    conn.execute(
+        "INSERT INTO key_value_store (key, value) VALUES (?1, ?2)",
+        &[sentence, json!(vectors).to_string().as_str()],
+    )?;
+
+    let structured_request = Request {
+        vectors: vectors.clone(),
+        sentences: vec![sentence.to_string()],
+    };
+
+    let closest_points = search_closest_points(
+        &data.arc_mutex_map,
+        structured_request.vectors[0].as_slice(),
+        &structured_request,
+    )
+    .unwrap();
+
+    insert_if_needed(
+        &data.arc_mutex_map,
+        structured_request.vectors[0].as_slice(),
+        sentence,
+        &closest_points,
+    );
+
+    let to_send = MyResponse {
+        search_result: closest_points
+            .iter()
+            .map(|(value, _)| value.clone())
+            .collect::<Vec<_>>(),
+        search_distance: closest_points
+            .iter()
+            .map(|(_, distance)| *distance)
+            .collect::<Vec<_>>(),
+        insertion: "inserted".to_string(),
+    };
+
+    Ok(to_send)
+}
+
+fn try_find_in_sqlite(
+    conn: &Connection,
+    sentence: &str,
+) -> Result<Option<MyResponse>, rusqlite::Error> {
+    let mut stmt = conn.prepare("SELECT value FROM key_value_store WHERE key = ?")?;
+
+    let mut rows = stmt.query_map(
+        &[sentence],
+        |row: &rusqlite::Row| -> rusqlite::Result<String> { row.get(0) },
+    )?;
+
+    if let Some(_row) = rows.next() {
+        println!("Sentence already in sqlite.");
+
+        // parse the row into a vector
+        let vector: Vec<Vec<f32>> = serde_json::from_str(&_row.unwrap()).unwrap();
+
+        let result = MyResponse {
+            search_result: vec![],
+            search_distance: vector[0].clone(),
+            insertion: "found in sqlite".to_string(),
+        };
+
+        Ok(Some(result))
+    } else {
+        Ok(None)
+    }
+}
 
 /// Main entry point for the web server.
 #[actix_web::main]
@@ -419,33 +343,9 @@ async fn main() -> std::io::Result<()> {
 
     // SELECT value FROM key_value_store WHERE key = 'some_key';
 
-    // open file and if it doesn't exist create it
-    let mut bloom_file = std::fs::File::open("bloom.json").unwrap_or_else(|_| {
-        println!("No bloom filter found on disk, creating a new one...");
-        std::fs::File::create("bloom.json").unwrap()
-    });
-
-    // try to load the bloom filter from disk if it exists otherwise create a new one
-    let bloom: BloomFilter = match serde_json::from_reader::<_, Vec<u64>>(&mut bloom_file) {
-        Ok(u64_array) => {
-            println!("Loading bloom filter from disk...");
-            BloomFilter::from_u64_array(u64_array.as_slice(), 1_000_000)
-        }
-        Err(_) => {
-            println!("No bloom filter found on disk, creating in memory...");
-            // Create a new Bloom filter with 1 million slots and a false positive rate of 1%.
-            BloomFilter::new(FilterBuilder::new(1_000_000, 0.01))
-        }
-    };
-
-    // let builder = FilterBuilder::new(1_000_000, 0.01);
-    // let bloom = BloomFilter::new(builder);
-    let arc_mutex_bloom = Arc::new(Mutex::new(bloom));
-
     // Create a copy of the Arc<Mutex<HnswMap>> to pass to the web server.
     let app_state = web::Data::new(AppState {
         arc_mutex_map: arc_mutex_map.clone(),
-        arc_mutex_bloom: arc_mutex_bloom.clone(),
         arc_conn: arc_conn.clone(),
     });
 
@@ -473,118 +373,4 @@ async fn main() -> std::io::Result<()> {
     .bind(host)?
     .run()
     .await
-}
-
-/// Represents a point in a high-dimensional space.
-#[derive(Clone, Copy, Debug)]
-struct Point([f32; 1536]);
-
-impl Point {
-    /// Create a `Point2` from a slice of f32 values.
-    fn from_slice(slice: &[f32]) -> Self {
-        let mut point = Point::default();
-        point.0.copy_from_slice(slice);
-        point
-    }
-}
-
-impl Default for Point {
-    fn default() -> Self {
-        Point([0.0; 1536])
-    }
-}
-
-impl instant_distance::Point for Point {
-    fn distance(&self, other: &Self) -> f32 {
-        self.0
-            .iter()
-            .zip(other.0.iter())
-            .map(|(a, b)| (a - b).powi(2))
-            .sum::<f32>()
-            .sqrt()
-    }
-}
-
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct MyResponse {
-    pub search_result: Vec<String>,
-    pub search_distance: Vec<f32>,
-    pub insertion: String,
-}
-
-/// Request structure for updating the HNSW map.
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Request {
-    pub sentences: Vec<String>,
-    pub vectors: Vec<Vec<f32>>,
-}
-
-/// Request structure for embedding a sentence.
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct EmbedRequest {
-    pub sentences: Vec<String>,
-}
-
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EmbedResponse {
-    pub object: String,
-    pub data: Vec<Daum>,
-    pub model: String,
-    pub usage: Usage,
-}
-
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Daum {
-    pub object: String,
-    pub index: i64,
-    pub embedding: Vec<f64>,
-}
-
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Usage {
-    #[serde(rename = "prompt_tokens")]
-    pub prompt_tokens: i64,
-    #[serde(rename = "total_tokens")]
-    pub total_tokens: i64,
-}
-
-// implement serde::Serialize for Point
-impl serde::Serialize for Point {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let mut vec = vec![];
-        for i in 0..self.0.len() {
-            vec.push(self.0[i]);
-        }
-        vec.serialize(serializer)
-    }
-}
-
-// impl serde::Deserialize for Point {
-//     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-//     where
-//         D: serde::Deserializer<'_>,
-//     {
-//         let vec = Vec::<f32>::deserialize(deserializer)?;
-//         let mut point = Point::default();
-//         point.0.copy_from_slice(&vec);
-//         Ok(point)
-//     }
-// }
-use serde_big_array::BigArray;
-
-impl<'de> serde::Deserialize<'de> for Point {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let arr = <[f32; 1536]>::deserialize(deserializer)?;
-        Ok(Point(arr))
-    }
 }
