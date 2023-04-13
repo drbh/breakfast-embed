@@ -7,7 +7,6 @@ use actix_web::{patch, post, web, App, HttpResponse, HttpServer, Responder};
 use instant_distance::{Builder, HnswMap, Search};
 use parking_lot::Mutex;
 use rusqlite::{Connection, Result};
-use serde_json::json;
 use std::sync::Arc;
 
 mod utils;
@@ -22,7 +21,7 @@ use types::*;
 // use sqlite as a queue for storing new embeddings
 
 /// Application state containing a shared HNSW map.
-struct AppState {
+pub struct AppState {
     arc_mutex_map: Arc<Mutex<HnswMap<Point, String>>>,
     arc_conn: Arc<Mutex<Connection>>,
 }
@@ -186,124 +185,6 @@ async fn embed_search_insert(req_body: String, data: web::Data<AppState>) -> imp
     }
 }
 
-async fn process_sentence(
-    sentence: &str,
-    data: web::Data<AppState>,
-) -> Result<MyResponse, Box<dyn std::error::Error>> {
-    println!("Embedding sentence: {}", sentence);
-
-    let conn = data.arc_conn.lock();
-    if let Some(result) = try_find_in_sqlite(&conn, sentence)? {
-        // TODO: if we find it we should use the stored vectors to search for the closest point
-
-        let structured_request = Request {
-            vectors: vec![result.search_distance.clone()],
-            sentences: vec![sentence.to_string()],
-        };
-
-        let closest_points = search_closest_points(
-            //
-            &data.arc_mutex_map,
-            &result.search_distance,
-            &structured_request,
-        )
-        .unwrap();
-
-        println!("Closest points: {:?}", closest_points);
-
-        let to_send = MyResponse {
-            search_result: closest_points
-                .iter()
-                .map(|(value, _)| value.clone())
-                .collect::<Vec<_>>(),
-            search_distance: closest_points
-                .iter()
-                .map(|(_, distance)| *distance)
-                .collect::<Vec<_>>(),
-            insertion: "already exists".to_string(),
-        };
-
-        // TODO: should return the closest point
-        return Ok(to_send);
-    }
-
-    // TODO: if we don't find it we should create the vectors and insert them into the map
-
-    let open_ai_response = create_openai_embedding(sentence).await?;
-    let vectors: Vec<Vec<f32>> = open_ai_response
-        .data
-        .iter()
-        .map(|x| x.embedding.iter().map(|y| *y as f32).collect())
-        .collect();
-
-    conn.execute(
-        "INSERT INTO key_value_store (key, value) VALUES (?1, ?2)",
-        &[sentence, json!(vectors).to_string().as_str()],
-    )?;
-
-    let structured_request = Request {
-        vectors: vectors.clone(),
-        sentences: vec![sentence.to_string()],
-    };
-
-    let closest_points = search_closest_points(
-        &data.arc_mutex_map,
-        structured_request.vectors[0].as_slice(),
-        &structured_request,
-    )
-    .unwrap();
-
-    insert_if_needed(
-        &data.arc_mutex_map,
-        structured_request.vectors[0].as_slice(),
-        sentence,
-        &closest_points,
-    );
-
-    let to_send = MyResponse {
-        search_result: closest_points
-            .iter()
-            .map(|(value, _)| value.clone())
-            .collect::<Vec<_>>(),
-        search_distance: closest_points
-            .iter()
-            .map(|(_, distance)| *distance)
-            .collect::<Vec<_>>(),
-        insertion: "inserted".to_string(),
-    };
-
-    Ok(to_send)
-}
-
-fn try_find_in_sqlite(
-    conn: &Connection,
-    sentence: &str,
-) -> Result<Option<MyResponse>, rusqlite::Error> {
-    let mut stmt = conn.prepare("SELECT value FROM key_value_store WHERE key = ?")?;
-
-    let mut rows = stmt.query_map(
-        &[sentence],
-        |row: &rusqlite::Row| -> rusqlite::Result<String> { row.get(0) },
-    )?;
-
-    if let Some(_row) = rows.next() {
-        println!("Sentence already in sqlite.");
-
-        // parse the row into a vector
-        let vector: Vec<Vec<f32>> = serde_json::from_str(&_row.unwrap()).unwrap();
-
-        let result = MyResponse {
-            search_result: vec![],
-            search_distance: vector[0].clone(),
-            insertion: "found in sqlite".to_string(),
-        };
-
-        Ok(Some(result))
-    } else {
-        Ok(None)
-    }
-}
-
 /// Main entry point for the web server.
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -333,15 +214,7 @@ async fn main() -> std::io::Result<()> {
         [],
     )
     .unwrap();
-
     let arc_conn = Arc::new(Mutex::new(conn));
-
-    // TODO: add insert command
-    //
-    // INSERT INTO key_value_store (key, value) VALUES ('some_key', 'some_value')
-    // ON CONFLICT (key) DO UPDATE SET value = excluded.value;
-
-    // SELECT value FROM key_value_store WHERE key = 'some_key';
 
     // Create a copy of the Arc<Mutex<HnswMap>> to pass to the web server.
     let app_state = web::Data::new(AppState {

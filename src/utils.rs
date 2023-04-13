@@ -3,19 +3,16 @@
 //! The map stores sentence embeddings as points in a high-dimensional space
 //! and allows efficient nearest-neighbor search for similar sentences.
 
+use actix_web::web;
 use instant_distance::{Builder, HnswMap, Search};
 use parking_lot::Mutex;
-use reqwest::header;
-use reqwest::redirect::Policy;
-use reqwest::Client;
-use rusqlite::Result;
+use reqwest::{header, redirect::Policy, Client};
+use rusqlite::{Connection, Result};
 use serde_json::json;
 use std::env;
 use std::sync::Arc;
 
-use crate::Request;
-use crate::Point;
-use crate::EmbedResponse;
+use crate::{AppState, EmbedResponse, MyResponse, Point, Request};
 
 /// Fetch the sentence embeddings for a list of sentences using OpenAI's
 pub async fn create_openai_embedding(
@@ -110,5 +107,123 @@ pub fn insert_if_needed(
         println!("Closest point is too close, not inserting.");
         println!("Closest point: {:?}", closest_points[0].0);
         "no insert".to_string()
+    }
+}
+
+pub async fn process_sentence(
+    sentence: &str,
+    data: web::Data<AppState>,
+) -> Result<MyResponse, Box<dyn std::error::Error>> {
+    println!("Embedding sentence: {}", sentence);
+
+    let conn = data.arc_conn.lock();
+    if let Some(result) = try_find_in_sqlite(&conn, sentence)? {
+        // TODO: if we find it we should use the stored vectors to search for the closest point
+
+        let structured_request = Request {
+            vectors: vec![result.search_distance.clone()],
+            sentences: vec![sentence.to_string()],
+        };
+
+        let closest_points = search_closest_points(
+            //
+            &data.arc_mutex_map,
+            &result.search_distance,
+            &structured_request,
+        )
+        .unwrap();
+
+        println!("Closest points: {:?}", closest_points);
+
+        let to_send = MyResponse {
+            search_result: closest_points
+                .iter()
+                .map(|(value, _)| value.clone())
+                .collect::<Vec<_>>(),
+            search_distance: closest_points
+                .iter()
+                .map(|(_, distance)| *distance)
+                .collect::<Vec<_>>(),
+            insertion: "already exists".to_string(),
+        };
+
+        // TODO: should return the closest point
+        return Ok(to_send);
+    }
+
+    // TODO: if we don't find it we should create the vectors and insert them into the map
+
+    let open_ai_response = create_openai_embedding(sentence).await?;
+    let vectors: Vec<Vec<f32>> = open_ai_response
+        .data
+        .iter()
+        .map(|x| x.embedding.iter().map(|y| *y as f32).collect())
+        .collect();
+
+    conn.execute(
+        "INSERT INTO key_value_store (key, value) VALUES (?1, ?2)",
+        &[sentence, json!(vectors).to_string().as_str()],
+    )?;
+
+    let structured_request = Request {
+        vectors: vectors.clone(),
+        sentences: vec![sentence.to_string()],
+    };
+
+    let closest_points = search_closest_points(
+        &data.arc_mutex_map,
+        structured_request.vectors[0].as_slice(),
+        &structured_request,
+    )
+    .unwrap();
+
+    insert_if_needed(
+        &data.arc_mutex_map,
+        structured_request.vectors[0].as_slice(),
+        sentence,
+        &closest_points,
+    );
+
+    let to_send = MyResponse {
+        search_result: closest_points
+            .iter()
+            .map(|(value, _)| value.clone())
+            .collect::<Vec<_>>(),
+        search_distance: closest_points
+            .iter()
+            .map(|(_, distance)| *distance)
+            .collect::<Vec<_>>(),
+        insertion: "inserted".to_string(),
+    };
+
+    Ok(to_send)
+}
+
+pub fn try_find_in_sqlite(
+    conn: &Connection,
+    sentence: &str,
+) -> Result<Option<MyResponse>, rusqlite::Error> {
+    let mut stmt = conn.prepare("SELECT value FROM key_value_store WHERE key = ?")?;
+
+    let mut rows = stmt.query_map(
+        &[sentence],
+        |row: &rusqlite::Row| -> rusqlite::Result<String> { row.get(0) },
+    )?;
+
+    if let Some(_row) = rows.next() {
+        println!("Sentence already in sqlite.");
+
+        // parse the row into a vector
+        let vector: Vec<Vec<f32>> = serde_json::from_str(&_row.unwrap()).unwrap();
+
+        let result = MyResponse {
+            search_result: vec![],
+            search_distance: vector[0].clone(),
+            insertion: "found in sqlite".to_string(),
+        };
+
+        Ok(Some(result))
+    } else {
+        Ok(None)
     }
 }
