@@ -7,9 +7,12 @@ built on:
 - hnsw
 - actix-web
 - sqlite3
-- openai embedding api
+- ~~openai embedding api~~
+- local embeddings [pretty-good-embeddings](https://github.com/drbh/pretty-good-embeddings)
 
 shout out to [Instant Domain](https://github.com/InstantDomain/instant-distance) for their fantastic work on hnsw 🙇‍♂️
+
+shout out to [SentenceTransformers](https://github.com/UKPLab/sentence-transformers) and specifically [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) for their lite and fast sentence embeddings model 🙇‍♂️
 
 ## 😅 Why?
 
@@ -22,6 +25,10 @@ git clone htt://github.com/drbh/breakfast-embed
 cd breakfast-embed
 cargo run --release
 ```
+
+## 🚜 Model
+
+The default model is [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) that has been converted to ONNX and optimized for inference using [onnxruntime-rs](https://github.com/nbigaouette/onnxruntime-rs). This is handled by the [pretty-good-embeddings](https://github.com/drbh/pretty-good-embeddings) crate, and that repo includes the 90MB model file.
 
 ## 🚀 Usage
 
