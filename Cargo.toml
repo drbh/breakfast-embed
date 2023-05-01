@@ -9,6 +9,7 @@ edition = "2021"
 instant-distance = { git = "https://github.com/drbh/instant-distance.git", branch = "add-incremental-index", features = [
     "with-serde",
 ] }
+pretty-good-embeddings = { git = "https://github.com/drbh/pretty-good-embeddings.git" }
 actix-web = "4.3.1"
 parking_lot = "0.12.1"
 serde_derive = "1.0.160"
@@ -18,5 +19,3 @@ reqwest = "0.11.16"
 serde-big-array = "0.5.1"
 fastbloom-rs = "0.5.3"
 rusqlite = "0.29.0"
-
-# async-std = { version = "1.10", features = ["attributes"] }

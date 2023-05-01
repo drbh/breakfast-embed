@@ -1,9 +1,11 @@
 use serde_big_array::BigArray;
 use serde_derive::{Deserialize, Serialize};
 
+const N: usize = 384;
+
 /// Represents a point in a high-dimensional space.
 #[derive(Clone, Copy, Debug)]
-pub struct Point(pub [f32; 1536]);
+pub struct Point(pub [f32; N]);
 
 impl Point {
     /// Create a `Point2` from a slice of f32 values.
@@ -16,7 +18,7 @@ impl Point {
 
 impl Default for Point {
     fn default() -> Self {
-        Point([0.0; 1536])
+        Point([0.0; N])
     }
 }
 
@@ -39,6 +41,15 @@ pub struct MyResponse {
     pub insertion: String,
 }
 
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MyLabelledResponse {
+    pub search_result: Vec<String>,
+    pub search_distance: Vec<f32>,
+    pub insertion: String,
+    pub labels: Vec<String>,
+}
+
 /// Request structure for updating the HNSW map.
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Request {
@@ -50,6 +61,13 @@ pub struct Request {
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EmbedRequest {
     pub sentences: Vec<String>,
+}
+
+/// Request structure for embedding a labelled sentence.
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EmbedLabelRequest {
+    pub sentences: Vec<String>,
+    pub labels: Vec<String>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -97,7 +115,7 @@ impl<'de> serde::Deserialize<'de> for Point {
     where
         D: serde::Deserializer<'de>,
     {
-        let arr = <[f32; 1536]>::deserialize(deserializer)?;
+        let arr = <[f32; N]>::deserialize(deserializer)?;
         Ok(Point(arr))
     }
 }

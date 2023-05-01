@@ -3,7 +3,7 @@
 //! The map stores sentence embeddings as points in a high-dimensional space
 //! and allows efficient nearest-neighbor search for similar sentences.
 
-use actix_web::{patch, post, web, App, HttpResponse, HttpServer, Responder};
+use actix_web::{patch, post, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use instant_distance::{Builder, HnswMap, Search};
 use parking_lot::Mutex;
 use rusqlite::{Connection, Result};
@@ -15,15 +15,13 @@ use utils::*;
 mod types;
 use types::*;
 
-// use std::time::Duration;
-// use async_std::task;
-
 // use sqlite as a queue for storing new embeddings
 
 /// Application state containing a shared HNSW map.
 pub struct AppState {
     arc_mutex_map: Arc<Mutex<HnswMap<Point, String>>>,
     arc_conn: Arc<Mutex<Connection>>,
+    model_path: String,
 }
 
 /// Flushes the HNSW map to disk.
@@ -162,15 +160,63 @@ async fn embed(req_body: String, _data: web::Data<AppState>) -> impl Responder {
 }
 
 #[post("/embed_search_insert")]
-async fn embed_search_insert(req_body: String, data: web::Data<AppState>) -> impl Responder {
+async fn embed_search_insert(
+    _req: HttpRequest,
+    req_body: String,
+    data: web::Data<AppState>,
+) -> impl Responder {
     let req: Result<EmbedRequest, _> = serde_json::from_str(&req_body);
+
+    // Only insert the query params if the query string starts with "should_insert"
+    let query_str = _req.query_string();
+    let should_insert_query_params = query_str.starts_with("should_insert");
 
     match req {
         Ok(req) => {
             let mut results = Vec::new();
 
             for sentence in &req.sentences {
-                match process_sentence(sentence, data.clone()).await {
+                match process_sentence(sentence, data.clone(), should_insert_query_params).await {
+                    Ok(result) => results.push(result),
+                    Err(err) => {
+                        eprintln!("Error processing sentence: {:?}", err);
+                        return HttpResponse::InternalServerError().body(err.to_string());
+                    }
+                }
+            }
+
+            HttpResponse::Ok().json(results)
+        }
+        Err(_) => HttpResponse::BadRequest().body("Invalid JSON format."),
+    }
+}
+
+#[post("/embed_label_search_insert")]
+async fn embed_label_search_insert(
+    _req: HttpRequest,
+    req_body: String,
+    data: web::Data<AppState>,
+) -> impl Responder {
+    let req: Result<EmbedLabelRequest, _> = serde_json::from_str(&req_body);
+
+    // Only insert the query params if the query string starts with "should_insert"
+    let query_str = _req.query_string();
+    let should_insert_query_params = query_str.starts_with("should_insert");
+
+    match req {
+        Ok(req) => {
+            let mut results = Vec::new();
+
+            // iterate over the sentences and labels at the same time
+            for (sentence, label) in req.sentences.iter().zip(req.labels.iter()) {
+                match process_sentence_with_label(
+                    sentence,
+                    label,
+                    data.clone(),
+                    should_insert_query_params,
+                )
+                .await
+                {
                     Ok(result) => results.push(result),
                     Err(err) => {
                         eprintln!("Error processing sentence: {:?}", err);
@@ -206,6 +252,7 @@ async fn main() -> std::io::Result<()> {
 
     let conn = Connection::open("vectors.db").unwrap();
 
+    // Create a KV store for the vectors.
     conn.execute(
         "CREATE TABLE IF NOT EXISTS key_value_store (
             key TEXT PRIMARY KEY,
@@ -214,22 +261,25 @@ async fn main() -> std::io::Result<()> {
         [],
     )
     .unwrap();
+
+    // Create a KV store for the labels.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS key_label_store (
+            key TEXT PRIMARY KEY,
+            label TEXT
+        );",
+        [],
+    )
+    .unwrap();
+
     let arc_conn = Arc::new(Mutex::new(conn));
 
     // Create a copy of the Arc<Mutex<HnswMap>> to pass to the web server.
     let app_state = web::Data::new(AppState {
         arc_mutex_map: arc_mutex_map.clone(),
         arc_conn: arc_conn.clone(),
+        model_path: "../pretty-good-embeddings/onnx".to_string(),
     });
-
-    // let mut file = std::fs::File::create("bloom.json").unwrap();
-    // serde_json::to_writer(&mut file, &bloom).unwrap();
-
-    // // TODO: revist
-    // // Spawn the background task
-    // // task::spawn(flush_periodically(web::Data::new(AppState {
-    // //     arc_mutex_map: arc_mutex_map.clone(),
-    // // })));
 
     println!("Starting server at {}...", host);
     HttpServer::new(move || {
@@ -240,6 +290,7 @@ async fn main() -> std::io::Result<()> {
             .service(update)
             .service(embed)
             .service(embed_search_insert)
+            .service(embed_label_search_insert)
             .service(flush)
             .service(load)
     })
