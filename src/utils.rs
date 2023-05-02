@@ -111,6 +111,7 @@ pub async fn process_sentence_with_label(
     should_insert: bool,
 ) -> Result<MyLabelledResponse, Box<dyn std::error::Error>> {
     let conn = data.arc_conn.lock();
+    let model_path = data.model_path.clone();
 
     // Check if the sentence is already in the database and if so, return it.
     if let Some(result) = try_find_label_in_sqlite(&conn, sentence)? {
@@ -140,7 +141,7 @@ pub async fn process_sentence_with_label(
     }
 
     let _client = EmbeddingsClient::new();
-    let mut client = _client.init("/Users/drbh/Projects/pretty-good-embeddings/onnx".to_string());
+    let mut client = _client.init(model_path);
 
     // If the sentence is not in the database, create an embedding for it.
     let embedding = client.embedding(sentence).unwrap();

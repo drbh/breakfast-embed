@@ -1,43 +1,55 @@
-# First stage: build the application
-FROM clux/muslrust:stable AS builder
-
-WORKDIR /app
-
-# Copy Cargo.toml and Cargo.lock
-COPY Cargo.toml Cargo.lock ./
-
-# Create the src directory and a dummy source file to build the dependencies
-RUN mkdir src && \
-    echo 'fn main() { println!("Dummy build."); }' > src/main.rs
-
-# Cache dependencies
-RUN cargo build --release --target=x86_64-unknown-linux-musl
-RUN rm -rf src target/x86_64-unknown-linux-musl/release/deps/breakfast*
-
-# Copy the real source files
-COPY src src
-
-# Build the application
-RUN cargo build --release --target=x86_64-unknown-linux-musl
-
-# Second stage: create the runtime image
-FROM alpine:3.15
-
-# Install dependencies
-RUN apk add --no-cache sqlite-libs ca-certificates libssl1.1
-
-# Create a user and group for the application
-RUN addgroup -S breakfast && adduser -S breakfast -G breakfast
+# Use the official Rust image as the base image
+FROM rust:1.68 as builder
 
 # Create a directory for the application
 WORKDIR /app
 
-# Copy the built binary from the first stage
-COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/breakfast /app/breakfast
+# Copy the Cargo.toml and Cargo.lock files
+COPY Cargo.toml ./
+
+# Create a dummy main.rs file to cache dependencies
+RUN mkdir src && \
+    echo "fn main() {println!(\"Dummy main\");}" > src/main.rs && \
+    cargo build --release && \
+    rm -rf src
+
+# Copy the real source files
+COPY src src
+
+# Build the release version of the application
+RUN cargo build --release
+
+# Start a new stage to create the final image
+FROM debian:buster-slim
+
+# Install dependencies
+RUN apt-get update && \
+    apt-get install -y sqlite3 libssl1.1 ca-certificates libstdc++6 wget gdb && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy the binary from the builder stage
+COPY --from=builder /app/target/release/breakfast-embed /app/breakfast
+
+# Copy the ONNX model
+COPY onnx /app/onnx
+
+# Download and extract ONNX Runtime library
+RUN wget https://github.com/microsoft/onnxruntime/releases/download/v1.8.1/onnxruntime-linux-x64-1.8.1.tgz && \
+    tar -xzf onnxruntime-linux-x64-1.8.1.tgz && \
+    rm onnxruntime-linux-x64-1.8.1.tgz
+
+# Set the library path to include ONNX Runtime library
+ENV LD_LIBRARY_PATH="/onnxruntime-linux-x64-1.8.1/lib:${LD_LIBRARY_PATH}"
+
+# Create a user and group for the application
+RUN groupadd -r breakfast && useradd -r -g breakfast breakfast
 
 # Set the user and group
 RUN chown -R breakfast:breakfast /app
 USER breakfast
+
+# Set the working directory
+WORKDIR /app
 
 # Expose the application's port
 EXPOSE 8080

@@ -1,0 +1,2 @@
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-args=-Wl,-rpath,target/debug/build/onnxruntime-sys-0e746d674855d5a6/out/onnxruntime/onnxruntime-osx-x64-1.8.1/lib"]

@@ -234,6 +234,8 @@ async fn embed_label_search_insert(
 /// Main entry point for the web server.
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    println!("Starting web server...");
+
     // open file and if it doesn't exist create it
     let mut file = std::fs::File::open("map.json").unwrap_or_else(|_| {
         println!("No map found on disk, creating a new one...");
@@ -278,7 +280,7 @@ async fn main() -> std::io::Result<()> {
     let app_state = web::Data::new(AppState {
         arc_mutex_map: arc_mutex_map.clone(),
         arc_conn: arc_conn.clone(),
-        model_path: "../pretty-good-embeddings/onnx".to_string(),
+        model_path: "./onnx".to_string(),
     });
 
     println!("Starting server at {}...", host);
