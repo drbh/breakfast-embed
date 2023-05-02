@@ -8,6 +8,8 @@ WORKDIR /app
 COPY Cargo.toml ./
 COPY Cargo.lock ./
 
+# Cache deps download
+RUN cargo fetch
 # Create a dummy main.rs file to cache dependencies
 RUN mkdir src && \
     echo "fn main() {println!(\"Dummy main\");}" > src/main.rs && \
