@@ -6,6 +6,7 @@ WORKDIR /app
 
 # Copy the Cargo.toml and Cargo.lock files
 COPY Cargo.toml ./
+COPY Cargo.lock ./
 
 # Create a dummy main.rs file to cache dependencies
 RUN mkdir src && \
