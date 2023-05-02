@@ -21,7 +21,6 @@ use types::*;
 pub struct AppState {
     arc_mutex_map: Arc<Mutex<HnswMap<Point, String>>>,
     arc_conn: Arc<Mutex<Connection>>,
-    model_path: String,
 }
 
 /// Flushes the HNSW map to disk.
@@ -280,7 +279,6 @@ async fn main() -> std::io::Result<()> {
     let app_state = web::Data::new(AppState {
         arc_mutex_map: arc_mutex_map.clone(),
         arc_conn: arc_conn.clone(),
-        model_path: "./onnx".to_string(),
     });
 
     println!("Starting server at {}...", host);
