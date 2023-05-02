@@ -111,7 +111,6 @@ pub async fn process_sentence_with_label(
     should_insert: bool,
 ) -> Result<MyLabelledResponse, Box<dyn std::error::Error>> {
     let conn = data.arc_conn.lock();
-    let model_path = data.model_path.clone();
 
     // Check if the sentence is already in the database and if so, return it.
     if let Some(result) = try_find_label_in_sqlite(&conn, sentence)? {
@@ -141,7 +140,7 @@ pub async fn process_sentence_with_label(
     }
 
     let _client = EmbeddingsClient::new();
-    let mut client = _client.init(model_path);
+    let mut client = _client.init_defaults();
 
     // If the sentence is not in the database, create an embedding for it.
     let embedding = client.embedding(sentence).unwrap();
@@ -213,8 +212,6 @@ pub async fn process_sentence(
 ) -> Result<MyResponse, Box<dyn std::error::Error>> {
     println!("Embedding sentence: {}", sentence);
 
-    let model_path = data.model_path.clone();
-
     let conn = data.arc_conn.lock();
     if let Some(result) = try_find_in_sqlite(&conn, sentence)? {
         // TODO: if we find it we should use the stored vectors to search for the closest point
@@ -251,7 +248,7 @@ pub async fn process_sentence(
     }
 
     let client = EmbeddingsClient::new();
-    let mut session = client.init(model_path);
+    let mut session = client.init_defaults();
 
     let embedding = session.embedding(sentence).unwrap();
     let vectors = vec![embedding];
