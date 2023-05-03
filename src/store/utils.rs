@@ -84,7 +84,7 @@ pub fn search_closest_points(
 
     let closest_points = {
         let mut closest_points_vec = Vec::new();
-        for closest_point in map.search(&point, &mut _search).take(15) {
+        for closest_point in map.search(&point, &mut _search).take(3) {
             closest_points_vec.push((closest_point.value.clone(), closest_point.distance));
         }
         closest_points_vec
