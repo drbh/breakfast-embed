@@ -1,5 +1,5 @@
-use breakfast_embed::common::chat_api_client::APIRequestClient;
 use breakfast_embed::common::embedding_api_client::EmbeddingAPIClient;
+use breakfast_embed::common::text_generation::TextGenerator;
 use serde_derive::Deserialize;
 use serde_derive::Serialize;
 use std::io::{self, Write};
@@ -17,6 +17,21 @@ pub struct EmbeddingResp {
 
 #[actix_web::main]
 async fn main() {
+    println!("🦩 We are loading the model, please wait a few seconds...");
+
+    let model_path = "../lamini-lm/LaMini-Flan-T5-783M/rust_model.ot";
+    let config_path = "../lamini-lm/LaMini-Flan-T5-783M/config.json";
+    let vocab_path = "../lamini-lm/LaMini-Flan-T5-783M/spiece.model";
+
+    let start_time = std::time::Instant::now();
+    let text_generator = TextGenerator::new(model_path, config_path, vocab_path).unwrap();
+    let end_time = std::time::Instant::now();
+
+    println!(
+        "Model loaded in {} seconds.",
+        end_time.duration_since(start_time).as_secs()
+    );
+
     loop {
         // init a new client for each interaction - this avoids
         // the client from being dropped and the connection closed
@@ -157,26 +172,45 @@ async fn main() {
 
                 println!("• Search took {}ms", (end_time - start_time).as_millis());
 
-                start_time = std::time::Instant::now();
                 println!("• Waiting for chatbot response...");
-                let client = APIRequestClient::new("http://localhost:5000");
-
+                // let client = APIRequestClient::new("http://localhost:5000");
                 let input_prompt = input.trim().to_string();
                 let context = response_sentence;
+                let full_prompt = format!(
+                    r#"
+Answer {input_prompt} with the following context in mind {context}
+"#,
+                );
+                println!(
+                    "• Generating text from a prompt of {} characters",
+                    full_prompt.len()
+                );
+                start_time = std::time::Instant::now();
+                let output = text_generator
+                    .generate_text(&full_prompt)
+                    .unwrap_or(vec!["Failed to generate text".to_string()]);
+                end_time = std::time::Instant::now();
+                println!(
+                    "• Generated in {} seconds.",
+                    end_time.duration_since(start_time).as_secs()
+                );
 
-                match client.send_request(&input_prompt, &context).await {
-                    Ok(response) => {
-                        end_time = std::time::Instant::now();
-                        println!(
-                            "• Chatbot response took {}ms",
-                            (end_time - start_time).as_millis()
-                        );
+                // combine the output into a single string
+                let final_output = output.join(" ");
 
-                        let response = &response[13..response.len() - 3];
-                        println!(">> {}\n", response);
-                    }
-                    Err(e) => eprintln!("Error: {}", e),
-                }
+                // count number of words in output
+                let num_words = final_output.split_whitespace().count();
+
+                let words_generated_per_minute = (num_words as f64
+                    / end_time.duration_since(start_time).as_secs() as f64)
+                    * 60.0;
+
+                println!(
+                    "• Generated {} words per minute",
+                    words_generated_per_minute
+                );
+
+                println!("=> {}\n", final_output);
             }
         }
     }
