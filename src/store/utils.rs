@@ -59,8 +59,8 @@ pub fn insert_if_needed(
 
 // process but only get the embedding
 pub async fn get_embedding(sentence: &str) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
-    let _client = EmbeddingsClient::new();
-    let mut client = _client.init_defaults();
+    let embedding_client = EmbeddingsClient::new();
+    let mut client = embedding_client.init_defaults();
 
     // If the sentence is not in the database, create an embedding for it.
     let embedding = client.embedding(sentence).unwrap();
@@ -103,8 +103,8 @@ pub async fn process_sentence_with_label(
         return Ok(to_send);
     }
 
-    let _client = EmbeddingsClient::new();
-    let mut client = _client.init_defaults();
+    let embedding_client = EmbeddingsClient::new();
+    let mut client = embedding_client.init_defaults();
 
     // If the sentence is not in the database, create an embedding for it.
     let embedding = client.embedding(sentence).unwrap();

@@ -19,9 +19,9 @@ pub struct EmbeddingResp {
 async fn main() {
     println!("🦩 We are loading the model, please wait a few seconds...");
 
-    let model_path = "../lamini-lm/LaMini-Flan-T5-783M/rust_model.ot";
-    let config_path = "../lamini-lm/LaMini-Flan-T5-783M/config.json";
-    let vocab_path = "../lamini-lm/LaMini-Flan-T5-783M/spiece.model";
+    let model_path = "chat_model/rust_model.ot";
+    let config_path = "chat_model/config.json";
+    let vocab_path = "chat_model/spiece.model";
 
     let start_time = std::time::Instant::now();
     let text_generator = TextGenerator::new(model_path, config_path, vocab_path).unwrap();
