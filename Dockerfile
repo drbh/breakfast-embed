@@ -9,6 +9,10 @@ COPY Cargo.toml ./
 
 # Create a dummy main.rs file to cache dependencies
 RUN mkdir src && \
+    mkdir src/store && \
+    mkdir src/cli && \
+    echo "fn main() {println!(\"Dummy main\");}" > src/store/main.rs && \
+    echo "fn main() {println!(\"Dummy main\");}" > src/cli/main.rs && \
     echo "fn main() {println!(\"Dummy main\");}" > src/main.rs && \
     cargo build --release && \
     rm -rf src
@@ -29,9 +33,6 @@ RUN apt-get update && \
 
 # Copy the binary from the builder stage
 COPY --from=builder /app/target/release/breakfast-embed /app/breakfast
-
-# Copy the ONNX model
-COPY onnx /app/onnx
 
 # Download and extract ONNX Runtime library
 RUN wget https://github.com/microsoft/onnxruntime/releases/download/v1.8.1/onnxruntime-linux-x64-1.8.1.tgz && \
