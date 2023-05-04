@@ -3,61 +3,14 @@
 //! The map stores sentence embeddings as points in a high-dimensional space
 //! and allows efficient nearest-neighbor search for similar sentences.
 
+use crate::{AppState, MyLabelledResponse, MyResponse, Point, Request};
 use actix_web::web;
 use instant_distance::{Builder, HnswMap, Search};
 use parking_lot::Mutex;
 use pretty_good_embeddings::Client as EmbeddingsClient;
-use reqwest::{header, redirect::Policy, Client};
 use rusqlite::{Connection, Result};
 use serde_json::json;
-use std::env;
 use std::sync::Arc;
-
-use crate::{AppState, EmbedResponse, MyLabelledResponse, MyResponse, Point, Request};
-
-/// Fetch the sentence embeddings for a list of sentences using OpenAI's
-pub async fn create_openai_embedding(
-    text_to_embed: &str,
-) -> Result<EmbedResponse, Box<dyn std::error::Error>> {
-    println!("Creating OpenAI embedding for: {}", text_to_embed);
-    let mut headers = header::HeaderMap::new();
-    headers.insert("Content-Type", "application/json".parse().unwrap());
-    headers.insert(
-        "Authorization",
-        [
-            "Bearer ",
-            env::var("OPENAI_API_KEY")
-                .unwrap_or("".to_string())
-                .as_str(),
-        ]
-        .concat()
-        .parse()
-        .unwrap(),
-    );
-
-    let client = Client::builder().redirect(Policy::none()).build().unwrap();
-
-    let body = json!({
-    "input": text_to_embed,
-    "model": "text-embedding-ada-002"
-    })
-    .to_string();
-
-    let res = client
-        .post("https://api.openai.com/v1/embeddings")
-        .headers(headers)
-        .body(body)
-        .send()
-        .await
-        .unwrap()
-        .text()
-        .await
-        .unwrap();
-
-    let response_json: EmbedResponse = serde_json::from_str(&res).unwrap();
-
-    Ok(response_json)
-}
 
 pub fn search_closest_points(
     arc_mutex_map: &Arc<Mutex<HnswMap<Point, String>>>,
@@ -84,7 +37,7 @@ pub fn search_closest_points(
 
     let closest_points = {
         let mut closest_points_vec = Vec::new();
-        for closest_point in map.search(&point, &mut _search).take(15) {
+        for closest_point in map.search(&point, &mut _search).take(3) {
             closest_points_vec.push((closest_point.value.clone(), closest_point.distance));
         }
         closest_points_vec
@@ -102,6 +55,16 @@ pub fn insert_if_needed(
     map.insert(Point::from_slice(vector), sentence.to_string())
         .expect("insertion failed");
     "success".to_string()
+}
+
+// process but only get the embedding
+pub async fn get_embedding(sentence: &str) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+    let embedding_client = EmbeddingsClient::new();
+    let mut client = embedding_client.init_defaults();
+
+    // If the sentence is not in the database, create an embedding for it.
+    let embedding = client.embedding(sentence).unwrap();
+    Ok(embedding)
 }
 
 pub async fn process_sentence_with_label(
@@ -140,9 +103,9 @@ pub async fn process_sentence_with_label(
         return Ok(to_send);
     }
 
-    let _client = EmbeddingsClient::new();
-    let mut client = _client.init_defaults();
-    
+    let embedding_client = EmbeddingsClient::new();
+    let mut client = embedding_client.init_defaults();
+
     // If the sentence is not in the database, create an embedding for it.
     let embedding = client.embedding(sentence).unwrap();
     let vectors = vec![embedding];

@@ -38,12 +38,12 @@ The easiest way to get started using breakfast-embed is via the CLI.
 
 ```bash
 # In one terminal start the server
-cargo run --bin breakfast-embed
+cargo run --bin breakfast-embed --release
 ```
 
 ```bash
 # In another terminal start the repl
-cargo run --bin breakfast-embed-cli
+cargo run --bin breakfast-embed-cli --release
 #     Finished dev [unoptimized + debuginfo] target(s) in 0.83s
 #      Running `target/debug/breakfast-embed-cli`
 # > !help
@@ -60,10 +60,18 @@ cargo run --bin breakfast-embed-cli
 # >
 ```
 
-A more advanced example is to use the chat client. However, this requires a running instance of a locally running LLM server. Please see the [llm/server.py](./llm/server.py) file for a simple example of how to run a server.
+A more advanced example is to use the chat client. However, this requires downloading the 3GB model. Once downloaded, the chat binary can be run with the following command. Note* all of the cli commands are available in the chat client.
 
+```bash
+cargo run --bin breakfast-embed-chat --release --features=chat
+#     Finished release [optimized] target(s) in 0.67s
+#      Running `target/release/breakfast-embed-chat`
+# 🦩 We are loading the model, please wait a few seconds...
+# Model loaded in 10 seconds.
+# > What is the document about?
+```
 
-**Example of not the smartest chat bot answering questions using breakfast-embed for memory.**
+**Example of the chat bot answering questions using breakfast-embed for memory. (interface has changed slightly)**
 ![chat](./assets/breakfast-embed-chat.gif)
 
 The memory used in the example above can be found in [sentences.txt](./sentences.txt); and is a version of an old folk tale call Stone Soup.

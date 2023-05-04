@@ -11,9 +11,15 @@ path = "src/store/main.rs"
 name = "breakfast-embed-cli"
 path = "src/cli/main.rs"
 
+# only include if the chat feature is enabled
 [[bin]]
 name = "breakfast-embed-chat"
 path = "src/chat/main.rs"
+required-features = ["chat"] 
+
+[[bin]]
+name = "breakfast-llm"
+path = "src/llm/main.rs"
 
 [dependencies]
 instant-distance = { git = "https://github.com/drbh/instant-distance.git", branch = "add-incremental-index", features = [
@@ -29,3 +35,10 @@ reqwest = "0.11.16"
 serde-big-array = "0.5.1"
 fastbloom-rs = "0.5.3"
 rusqlite = "0.29.0"
+
+# only include if the chat feature is enabled
+rust-bert = { git = "https://github.com/drbh/rust-bert.git", branch = "enable-t5-text-generation", optional = true }
+anyhow = { version = "1.0.71", optional = true }
+
+[features]
+chat = ["rust-bert", "anyhow"]
