@@ -171,7 +171,7 @@ async fn update(req_body: String, data: web::Data<AppState>) -> impl Responder {
     )
 }
 
-/// Embed a sentence using OpenAI's text embedding API.
+/// Embed a sentence using ONNX Runtime.
 #[post("/embed")]
 async fn embed(req_body: String, _data: web::Data<AppState>) -> impl Responder {
     let req: Result<EmbedRequest, _> = serde_json::from_str(&req_body);
@@ -182,17 +182,8 @@ async fn embed(req_body: String, _data: web::Data<AppState>) -> impl Responder {
 
             for sentence in &req.sentences {
                 println!("Embedding sentence: {}", sentence);
-                match create_openai_embedding(&sentence).await {
-                    Ok(open_ai_response) => {
-                        let vector: Vec<f32> = open_ai_response
-                            .data
-                            .iter()
-                            .map(|x| x.embedding.iter().map(|y| *y as f32).collect())
-                            .collect::<Vec<Vec<f32>>>()
-                            .into_iter()
-                            .flatten()
-                            .collect();
-
+                match get_embedding(&sentence).await {
+                    Ok(vector) => {
                         vectors.push(vector);
                     }
                     Err(err) => {
